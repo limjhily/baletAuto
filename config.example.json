@@ -1,0 +1,23 @@
+{
+	"name": "사용자이름",
+	"phone": "01012345678",
+	"is_resident_staff": true,
+	"car_wash": false,
+	"service_type": "일반",
+	"car_number": "00가0000",
+	"car_model": "차량모델",
+	"car_brand": "차량브랜드",
+	"car_color": "흰색",
+	"discount_type": "일반",
+	"departure_time": "07:00",
+	"arrival_days_offset": 3,
+	"arrival_time": "18:00",
+	"departure_airline": "대한항공",
+	"arrival_airline": "대한항공",
+	"booking_url": "https://valet.amanopark.co.kr/booking",
+	"booking_list_url": "https://valet.amanopark.co.kr/booking-list",
+	"telegram": {
+		"bot_token": "YOUR_BOT_TOKEN",
+		"chat_id": "YOUR_CHAT_ID"
+	}
+}
