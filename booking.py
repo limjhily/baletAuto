@@ -224,8 +224,13 @@ def run_booking(config, departure_date, dry_run=False, skip_dates=False):
         skip_dates: True면 날짜/시간 선택을 스킵 (예약이 꽉 찬 경우 테스트용)
 
     Returns:
-        bool: 예약 성공 여부
+        dict: {
+            "success": bool,
+            "error": str or None,
+            "screenshot": str or None
+        }
     """
+    result = {"success": False, "error": None, "screenshot": None}
     arrival_date = departure_date + timedelta(days=config["arrival_days_offset"])
 
     logger.info("=" * 60)
@@ -317,7 +322,10 @@ def run_booking(config, departure_date, dry_run=False, skip_dates=False):
                 time_inputs = page.locator('.el-date-editor--time-select input.el-input__inner')
 
                 # 출발 날짜
-                select_date(page, date_inputs.nth(0), departure_date, "출발 일시")
+                try:
+                    select_date(page, date_inputs.nth(0), departure_date, "출발 일시")
+                except Exception as e:
+                    raise Exception(f"출발 날짜({departure_date.strftime('%Y-%m-%d')}) 선택 실패: {e}")
                 page.wait_for_timeout(500)
 
                 # 출발 시간
@@ -325,7 +333,10 @@ def run_booking(config, departure_date, dry_run=False, skip_dates=False):
                 page.wait_for_timeout(300)
 
                 # 도착 날짜
-                select_date(page, date_inputs.nth(1), arrival_date, "도착 일시")
+                try:
+                    select_date(page, date_inputs.nth(1), arrival_date, "도착 일시")
+                except Exception as e:
+                    raise Exception(f"도착 날짜({arrival_date.strftime('%Y-%m-%d')}) 선택 실패: {e}")
                 page.wait_for_timeout(500)
 
                 # 도착 시간
@@ -376,7 +387,9 @@ def run_booking(config, departure_date, dry_run=False, skip_dates=False):
                 logger.info("   30초간 브라우저를 유지합니다. 직접 확인해 주세요.")
                 page.wait_for_timeout(30000)
                 browser.close()
-                return True
+                result["success"] = True
+                result["screenshot"] = screenshot_path
+                return result
 
             # ===== 19. 등록하기 클릭 =====
             register_btn = page.locator('button.el-button--primary').filter(has_text="등록하기")
@@ -384,6 +397,18 @@ def run_booking(config, departure_date, dry_run=False, skip_dates=False):
             logger.info("등록하기 클릭")
 
             page.wait_for_timeout(2000)
+
+            # 👉 등록 실패 팝업 확인 (예: 이미 예약된 차량 등)
+            alert_popup = page.locator('.el-message-box__message').first
+            if alert_popup.is_visible():
+                error_msg = alert_popup.text_content().strip()
+                logger.error(f"등록 실패 안내: {error_msg}")
+                os.makedirs(LOG_DIR, exist_ok=True)
+                screenshot_path = os.path.join(LOG_DIR, f"register_error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+                page.screenshot(path=screenshot_path)
+                result["error"] = error_msg
+                result["screenshot"] = screenshot_path
+                return result
 
             # ===== 20. "발렛 예약" 확인 팝업 → 확인 클릭 =====
             try:
@@ -402,25 +427,29 @@ def run_booking(config, departure_date, dry_run=False, skip_dates=False):
             page.wait_for_timeout(3000)
 
             # ===== 21. 예약 검증 =====
-            success = verify_booking(page, config, departure_date)
+            verify_result = verify_booking(page, config, departure_date)
             browser.close()
-            return success
+            return verify_result
 
         except Exception as e:
-            logger.error(f"예약 실패: {e}")
+            err_msg = str(e)
+            logger.error(f"예약 실패: {err_msg}")
+            result["error"] = err_msg
             try:
                 os.makedirs(LOG_DIR, exist_ok=True)
                 screenshot_path = os.path.join(LOG_DIR, f"error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
                 page.screenshot(path=screenshot_path)
                 logger.info(f"에러 스크린샷: {screenshot_path}")
+                result["screenshot"] = screenshot_path
             except:
                 pass
             browser.close()
-            return False
+            return result
 
 
 def verify_booking(page, config, departure_date):
     """예약 확인 페이지에서 예약 성공 여부 검증"""
+    result = {"success": False, "error": None, "screenshot": None}
     try:
         logger.info("예약 확인 페이지로 이동...")
         page.goto(config["booking_list_url"], wait_until="networkidle", timeout=30000)
@@ -454,24 +483,51 @@ def verify_booking(page, config, departure_date):
         confirm_btn.click()
         page.wait_for_timeout(3000)
 
-        # 출국일 확인
+        # 출국일 확인 - 1번 행(최신 예약)에서만 확인
         target_date_str = departure_date.strftime('%Y-%m-%d')
-        page_text = page.text_content('body') or ""
-
-        if target_date_str in page_text:
-            logger.info(f"✅ 예약 확인 성공! 출국일: {target_date_str}")
-            os.makedirs(LOG_DIR, exist_ok=True)
-            screenshot_path = os.path.join(LOG_DIR, f"success_{target_date_str}.png")
-            page.screenshot(path=screenshot_path)
-            logger.info(f"확인 스크린샷: {screenshot_path}")
-            return True
+        
+        # Element UI 테이블의 첫 번째 데이터 행 찾기
+        first_row = page.locator('tr.el-table__row').first
+        
+        if first_row.count() > 0:
+            row_text = first_row.text_content() or ""
+            if target_date_str in row_text:
+                logger.info(f"✅ 예약 확인 성공! 1번 행 출국일 일치: {target_date_str}")
+                os.makedirs(LOG_DIR, exist_ok=True)
+                screenshot_path = os.path.join(LOG_DIR, f"success_{target_date_str}.png")
+                page.screenshot(path=screenshot_path)
+                logger.info(f"확인 스크린샷: {screenshot_path}")
+                result["success"] = True
+                result["screenshot"] = screenshot_path
+                return result
+            else:
+                err_msg = f"예약 리스트 1번 행 날짜 불일치 (기대값: {target_date_str}, 실제: {row_text.strip()[:30]}...)"
+                logger.warning(f"⚠️ {err_msg}")
+                os.makedirs(LOG_DIR, exist_ok=True)
+                screenshot_path = os.path.join(LOG_DIR, f"verify_fail_{target_date_str}.png")
+                page.screenshot(path=screenshot_path)
+                result["error"] = err_msg
+                result["screenshot"] = screenshot_path
+                return result
         else:
-            logger.warning(f"⚠️ 예약 리스트에서 {target_date_str}을 찾을 수 없음")
+            err_msg = "조회된 예약 데이터가 없습니다."
+            logger.warning(f"⚠️ {err_msg}")
             os.makedirs(LOG_DIR, exist_ok=True)
-            screenshot_path = os.path.join(LOG_DIR, f"verify_fail_{target_date_str}.png")
+            screenshot_path = os.path.join(LOG_DIR, f"verify_empty_{target_date_str}.png")
             page.screenshot(path=screenshot_path)
-            return False
+            result["error"] = err_msg
+            result["screenshot"] = screenshot_path
+            return result
 
     except Exception as e:
-        logger.error(f"예약 확인 실패: {e}")
-        return False
+        err_msg = f"예약 조회 에러: {str(e)}"
+        logger.error(err_msg)
+        result["error"] = err_msg
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            screenshot_path = os.path.join(LOG_DIR, f"verify_error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+            page.screenshot(path=screenshot_path)
+            result["screenshot"] = screenshot_path
+        except:
+            pass
+        return result

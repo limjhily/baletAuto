@@ -94,11 +94,30 @@ def execute_booking(config, dry_run=False, max_retries=3, override_date=None, sk
 
     logger.info(f"🎯 목표 예약: 출발 {departure_date.strftime('%Y-%m-%d')} → 도착 {arrival_date.strftime('%Y-%m-%d')}")
 
+    # 예약 시도마다의 마지막 실패 원인을 저장
+    last_error_msg = "알 수 없는 에러"
+    last_screenshot = None
+
     for attempt in range(1, max_retries + 1):
         logger.info(f"📝 예약 시도 {attempt}/{max_retries}")
 
         try:
-            success = run_booking(config, departure_date, dry_run=dry_run, skip_dates=skip_dates)
+            result = run_booking(config, departure_date, dry_run=dry_run, skip_dates=skip_dates)
+            
+            # 하위 호환성 (혹시 True/False 반환되는 경우 대비)
+            if isinstance(result, bool):
+                success = result
+                err_text = None
+                shot_path = None
+            else:
+                success = result.get("success", False)
+                err_text = result.get("error")
+                shot_path = result.get("screenshot")
+            
+            if err_text:
+                last_error_msg = err_text
+            if shot_path:
+                last_screenshot = shot_path
 
             if success:
                 msg = (
@@ -115,19 +134,23 @@ def execute_booking(config, dry_run=False, max_retries=3, override_date=None, sk
                 send_telegram(config, msg)
 
                 # 성공 스크린샷이 있으면 전송
-                screenshot = os.path.join(LOG_DIR, f"success_{departure_date.strftime('%Y-%m-%d')}.png")
-                if os.path.exists(screenshot):
-                    send_telegram_photo(config, screenshot, "예약 확인 스크린샷")
+                if shot_path and os.path.exists(shot_path):
+                    send_telegram_photo(config, shot_path, "예약 확인 스크린샷")
+                else:
+                    screenshot = os.path.join(LOG_DIR, f"success_{departure_date.strftime('%Y-%m-%d')}.png")
+                    if os.path.exists(screenshot):
+                        send_telegram_photo(config, screenshot, "예약 확인 스크린샷")
 
                 return True
             else:
-                logger.warning(f"예약 시도 {attempt} 실패")
+                logger.warning(f"예약 시도 {attempt} 실패: {err_text}")
                 if attempt < max_retries:
                     logger.info(f"5초 후 재시도...")
                     time.sleep(5)
 
         except Exception as e:
             logger.error(f"예약 시도 {attempt} 에러: {e}")
+            last_error_msg = f"예외 발생: {str(e)}"
             if attempt < max_retries:
                 logger.info(f"5초 후 재시도...")
                 time.sleep(5)
@@ -136,11 +159,15 @@ def execute_booking(config, dry_run=False, max_retries=3, override_date=None, sk
     fail_msg = (
         f"❌ <b>발렛파킹 예약 실패!</b>\n\n"
         f"📅 목표 출발일: {departure_date.strftime('%Y-%m-%d')}\n"
-        f"⚠️ {max_retries}회 시도 모두 실패\n"
-        f"⏰ 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        f"로그를 확인해 주세요."
+        f"⚠️ {max_retries}회 시도 모두 실패\n\n"
+        f"<b>[실패 원인]</b>\n{last_error_msg}\n\n"
+        f"⏰ 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
     send_telegram(config, fail_msg)
+    
+    if last_screenshot and os.path.exists(last_screenshot):
+        send_telegram_photo(config, last_screenshot, "실패 스크린샷")
+        
     return False
 
 
