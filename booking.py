@@ -481,30 +481,65 @@ def verify_booking(page, config, departure_date):
         # 확인 버튼 클릭
         confirm_btn = page.locator('button').filter(has_text="확인").first
         confirm_btn.click()
+        
+        # 목록 데이터가 로딩될 때까지 기본 대기 
         page.wait_for_timeout(3000)
+        
+        try:
+            page.locator('.component-table-row.body').first.wait_for(timeout=7000)
+        except Exception:
+            pass # 로딩 타임아웃 발생해도 아래 검증에서 처리됨
 
         # 출국일 확인 - 1번 행(최신 예약)에서만 확인
         target_date_str = departure_date.strftime('%Y-%m-%d')
         
-        # Element UI 테이블의 첫 번째 데이터 행 찾기
-        first_row = page.locator('tr.el-table__row').first
+        # 예약 데이터의 첫 번째 행 찾기
+        first_row = page.locator('.component-table-row.body').first
         
+        # 만약 여전히 '예약 정보가 없습니다' 라면 스피너 지연을 고려해 2초 추가 대기
+        if first_row.count() > 0 and "예약 정보가 없습니다" in (first_row.text_content() or ""):
+            page.wait_for_timeout(2000)
+            first_row = page.locator('.component-table-row.body').first
+
         if first_row.count() > 0:
             row_text = first_row.text_content() or ""
-            if target_date_str in row_text:
-                logger.info(f"✅ 예약 확인 성공! 1번 행 출국일 일치: {target_date_str}")
-                os.makedirs(LOG_DIR, exist_ok=True)
-                screenshot_path = os.path.join(LOG_DIR, f"success_{target_date_str}.png")
-                page.screenshot(path=screenshot_path)
-                logger.info(f"확인 스크린샷: {screenshot_path}")
-                result["success"] = True
-                result["screenshot"] = screenshot_path
-                return result
-            else:
-                err_msg = f"예약 리스트 1번 행 날짜 불일치 (기대값: {target_date_str}, 실제: {row_text.strip()[:30]}...)"
+            if "예약 정보가 없습니다" in row_text:
+                err_msg = "조회된 예약 데이터가 없습니다."
                 logger.warning(f"⚠️ {err_msg}")
                 os.makedirs(LOG_DIR, exist_ok=True)
-                screenshot_path = os.path.join(LOG_DIR, f"verify_fail_{target_date_str}.png")
+                screenshot_path = os.path.join(LOG_DIR, f"verify_empty_{target_date_str}.png")
+                page.screenshot(path=screenshot_path)
+                result["error"] = err_msg
+                result["screenshot"] = screenshot_path
+                return result
+
+            cols = first_row.locator('.el-col')
+            if cols.count() >= 4:
+                # 4번째 컬럼(index 3)이 출국일
+                departure_col_text = cols.nth(3).text_content() or ""
+                if target_date_str in departure_col_text:
+                    logger.info(f"✅ 예약 확인 성공! 1번 행 출국일 일치: {target_date_str}")
+                    os.makedirs(LOG_DIR, exist_ok=True)
+                    screenshot_path = os.path.join(LOG_DIR, f"success_{target_date_str}.png")
+                    page.screenshot(path=screenshot_path)
+                    logger.info(f"확인 스크린샷: {screenshot_path}")
+                    result["success"] = True
+                    result["screenshot"] = screenshot_path
+                    return result
+                else:
+                    err_msg = f"예약 리스트 1번 행 출국일 불일치 (기대값: {target_date_str}, 실제: {departure_col_text.strip()})"
+                    logger.warning(f"⚠️ {err_msg}")
+                    os.makedirs(LOG_DIR, exist_ok=True)
+                    screenshot_path = os.path.join(LOG_DIR, f"verify_fail_{target_date_str}.png")
+                    page.screenshot(path=screenshot_path)
+                    result["error"] = err_msg
+                    result["screenshot"] = screenshot_path
+                    return result
+            else:
+                err_msg = f"예약 리스트 데이터 파싱 오류 (컬럼 형태 불일치)"
+                logger.warning(f"⚠️ {err_msg}")
+                os.makedirs(LOG_DIR, exist_ok=True)
+                screenshot_path = os.path.join(LOG_DIR, f"verify_parse_fail_{target_date_str}.png")
                 page.screenshot(path=screenshot_path)
                 result["error"] = err_msg
                 result["screenshot"] = screenshot_path
